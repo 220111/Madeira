@@ -94,6 +94,7 @@ GAME_MODULES="msvcr70 msvcr71 msvcr80 msvcr90 msvcr100 msvcrt20 msvcrt40 msvcirt
 #   wmadmod                 XAudio2's xWMA voices decode through the WMA decoder DMO (docs/MEDIA.md)
 #   build/wine-pe/farm-modules.txt   other stock modules the farm ships for programs that import them
 # shellcheck disable=SC2086,SC2046 # the lists are split on purpose
+UNDELAY_SET=" cryptsp d3dx11_43 msvcp110 msvcr110 xaudio2_7 tbs wintypes wmadmod $(echo $GAME_MODULES $(grep -v '^#' "$R/build/wine-pe/farm-modules.txt")) "
 [ $# -gt 0 ] || set -- cryptsp d3dx11_43 msvcp110 msvcr110 xaudio2_7 tbs wintypes wmadmod $GAME_MODULES \
     $(grep -v '^#' "$R/build/wine-pe/farm-modules.txt")
 [ -x "$STRIP" ] || { echo "llvm-mingw not found at $TC (docs/BUILDING.md)" >&2; exit 1; }
@@ -137,6 +138,13 @@ mkdir -p "$B/dlls/stdole2.tlb"
 # stub). A module is changed only when every DLL it delay-loads is in the farm
 # or built in this run; its Makefile.in is restored when the script ends.
 # UNDELAY=0 keeps the delay imports.
+# Only the game/stock builtins above are changed (UNDELAY_SET). The core system
+# DLLs build.sh rebuilds with them (ucrtbase, kernel32, kernelbase, advapi32,
+# ...) keep their delay imports: linking them as plain imports ties them into
+# an import cycle, so ucrtbase's DllMain ran after a dependent already called
+# into the CRT and msvcrt_get_thread_data read a NULL MSVCRT_locale (c0000005
+# in dockhost.exe's xtajit64 process_attach, willfaust/Madeira#495).
+# UNDELAY=all changes every module named.
 undelayed=()
 backup="$(mktemp -d)"
 restore_makefiles() {
@@ -148,6 +156,7 @@ trap restore_makefiles EXIT
 in_farm() { [ -n "$(find "$DEST" -maxdepth 1 -iname "$1.dll" 2>/dev/null)" ]; }
 if [ "${UNDELAY:-1}" != 0 ]; then
     for m in "$@"; do
+        [ "${UNDELAY:-1}" = all ] || case "$UNDELAY_SET" in *" $m "*) ;; *) continue ;; esac
         mk="$R/wine/dlls/$m/Makefile.in"
         [ -f "$mk" ] || continue
         delayed="$(sed -n 's/^DELAYIMPORTS[[:space:]]*=[[:space:]]*//p' "$mk")"
